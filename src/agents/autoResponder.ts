@@ -4,6 +4,7 @@ import { config } from '../config';
 import { Signal } from '../types';
 import { storeApprovalState } from '../context/memory';
 import { sendMessage } from '../messenger';
+import fmt from '../utils/fmt';
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -45,6 +46,14 @@ export class AutoResponderAgent {
     const approvalId = uuidv4();
     const shortId = approvalId.slice(0, 8);
 
+    // ─── Compute expiry label ──────────────────────────────────────────────
+    const expiresAt = new Date(Date.now() + 3600 * 1000);
+    const expiryStr = expiresAt.toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: config.user.timezone,
+    });
+
     await storeApprovalState(
       approvalId,
       {
@@ -56,7 +65,7 @@ export class AutoResponderAgent {
           source: signal.source,
           sender_id: signal.sender_id,
         },
-        expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+        expires_at: expiresAt.toISOString(),
       },
       3600
     );
@@ -64,22 +73,38 @@ export class AutoResponderAgent {
     // Also store by short ID for easy lookup
     await storeApprovalState(`short:${shortId}`, approvalId, 3600);
 
-    const approvalMessage = [
-      `📝 *Draft Reply — Waiting for Approval*`,
-      ``,
-      `_Original:_`,
-      `> ${signal.raw_text.slice(0, 200)}${signal.raw_text.length > 200 ? '...' : ''}`,
-      ``,
-      `_Suggested reply:_`,
-      draft,
-      ``,
-      `Reply:`,
-      `✅ *SEND ${shortId}* to send this`,
-      `✏️ *EDIT ${shortId} <your text>* to send custom reply`,
-      `❌ *SKIP ${shortId}* to discard`,
-    ].join('\n');
+    // ─── Source label ──────────────────────────────────────────────────────
+    const sourceLabel =
+      signal.source === 'email'
+        ? 'Email'
+        : signal.source === 'telegram'
+        ? 'Telegram message'
+        : signal.source.charAt(0).toUpperCase() + signal.source.slice(1);
 
-    await sendMessage(approvalMessage);
+    await sendMessage(
+      fmt.build(
+        fmt.header('📝  Draft Reply — Awaiting Your Approval'),
+        `  ID: ${fmt.bold(shortId)}  ·  Expires at ${expiryStr}`,
+        '',
+        fmt.divider(),
+        `*Original ${sourceLabel}*`,
+        fmt.quote(signal.raw_text.slice(0, 220)),
+        '',
+        fmt.divider(),
+        '*Suggested Reply*',
+        `  ${draft}`,
+        fmt.divider(),
+        '',
+        '*What would you like to do?*',
+        '',
+        `  ✅  *SEND ${shortId}*${' '.repeat(6)}Send this reply as-is`,
+        `  ✏️  *EDIT ${shortId}* _<text>_   Send your own text instead`,
+        `  ❌  *SKIP ${shortId}*${' '.repeat(6)}Discard — no reply will be sent`,
+        '',
+        fmt.footer(`This draft will auto-expire at ${expiryStr}.`)
+      )
+    );
+
     console.log(`[AutoResponder] Draft sent via Telegram, approval ID: ${shortId}`);
   }
 }

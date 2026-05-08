@@ -7,6 +7,7 @@ import {
   memGet,
   memListGet,
 } from '../context/memory';
+import fmt from '../utils/fmt';
 
 export interface DepartureRecord {
   event_id: string;
@@ -77,23 +78,87 @@ export class LearningAgent {
       meeting_type: string;
     }>('patterns:meetings:all', 50);
 
+    const now = new Date();
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - 7);
+    const weekLabel = weekStart.toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      timeZone: config.user.timezone,
+    });
+    const weekEnd = now.toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      timeZone: config.user.timezone,
+    });
+
     const physical = allMeetings.filter((m) => m.meeting_type === 'physical');
     const virtualMeetings = allMeetings.filter((m) => m.meeting_type === 'virtual');
     const onTimePhysical = physical.filter((m) => m.was_on_time === true).length;
     const latePhysical = physical.filter((m) => m.was_on_time === false).length;
+    const untrackedPhysical = physical.filter((m) => m.was_on_time === null).length;
 
-    return [
-      `📊 *Weekly Insights*`,
-      ``,
-      `🏢 Physical meetings: ${physical.length} total`,
-      `  ✅ On time: ${onTimePhysical}`,
-      `  ⏰ Late: ${latePhysical}`,
-      `💻 Virtual meetings: ${virtualMeetings.length} total`,
-      ``,
-      latePhysical > onTimePhysical
-        ? `⚠️ You tend to be late for physical meetings. I've added extra buffer to your departure alerts.`
-        : `✅ Great punctuality this week!`,
-    ].join('\n');
+    const punctualityRate =
+      physical.length > 0 ? Math.round((onTimePhysical / physical.length) * 100) : null;
+
+    const rateBar =
+      punctualityRate !== null
+        ? this.buildProgressBar(punctualityRate)
+        : '  No data yet';
+
+    const isHabitual = latePhysical > onTimePhysical && physical.length >= 3;
+
+    // ─── Analysis block ───────────────────────────────────────────────────
+    const analysisLines: string[] = [];
+    if (physical.length === 0 && virtualMeetings.length === 0) {
+      analysisLines.push('  No meeting data recorded yet.');
+      analysisLines.push('  Reply LEFT when you leave for a physical meeting to start tracking.');
+    } else if (isHabitual) {
+      analysisLines.push('  ⚠️  You tend to be late for physical meetings.');
+      analysisLines.push('  I\'ve added a 15-min extra buffer to your departure alerts.');
+    } else if (punctualityRate !== null && punctualityRate >= 80) {
+      analysisLines.push('  ✅  Excellent punctuality this week — keep it up!');
+    } else if (punctualityRate !== null && punctualityRate >= 50) {
+      analysisLines.push('  🟡  Decent punctuality. A bit more buffer time could help.');
+    } else if (punctualityRate !== null) {
+      analysisLines.push('  ⚠️  Punctuality needs improvement.');
+      analysisLines.push('  Consider leaving earlier — I\'ll automatically extend your travel buffer.');
+    }
+
+    return fmt.build(
+      fmt.header('📊  Weekly Intelligence Report', `${weekLabel} – ${weekEnd}`),
+      '',
+      '*🏢  Physical Meetings*',
+      fmt.field('Total', String(physical.length)),
+      fmt.field('On time', String(onTimePhysical)),
+      fmt.field('Late', String(latePhysical)),
+      untrackedPhysical > 0 ? fmt.field('Untracked', String(untrackedPhysical)) : '',
+      punctualityRate !== null
+        ? `  Punctuality:  ${punctualityRate}%  ${rateBar}`
+        : '  Punctuality:  No data yet',
+      '',
+      '*💻  Virtual Meetings*',
+      fmt.field('Total', String(virtualMeetings.length)),
+      '  _(Punctuality tracking not applicable for virtual meetings)_',
+      '',
+      fmt.divider(),
+      '*Analysis*',
+      '',
+      ...analysisLines,
+      '',
+      fmt.divider(),
+      fmt.footer(
+        `Data from the last 14 days · ${allMeetings.length} meeting${allMeetings.length !== 1 ? 's' : ''} tracked.`
+      )
+    );
+  }
+
+  /** Build a simple ASCII progress bar for punctuality rate */
+  private buildProgressBar(percent: number): string {
+    const filled = Math.round(percent / 10);
+    const empty = 10 - filled;
+    return `[${'█'.repeat(filled)}${'░'.repeat(empty)}]`;
   }
 }
 

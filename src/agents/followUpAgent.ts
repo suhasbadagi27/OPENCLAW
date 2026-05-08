@@ -3,6 +3,7 @@ import { config } from '../config';
 import { ScoredEvent } from '../types';
 import { sendMessage } from '../messenger';
 import { memSet, memGet } from '../context/memory';
+import fmt from '../utils/fmt';
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -11,7 +12,7 @@ Based on the meeting details provided, create:
 1. A concise 3–5 sentence summary of likely discussion points
 2. A bullet list of 3–5 likely action items
 
-Format:
+Format your response EXACTLY as:
 SUMMARY:
 <summary here>
 
@@ -49,22 +50,62 @@ export class FollowUpAgent {
   private async sendFollowUpPrompt(event: ScoredEvent): Promise<void> {
     await memSet(`followup:pending:${event.id}`, event, 3600);
 
-    const message = [
-      `✅ *${event.title}* just ended.`,
-      ``,
-      `Want a meeting summary and action items?`,
-      `Reply *SUMMARY ${event.id.slice(0, 8)}* for an AI summary.`,
-      `Reply *SKIP ${event.id.slice(0, 8)}* to dismiss.`,
-    ].join('\n');
+    const startTime = new Date(event.start).toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: config.user.timezone,
+    });
+    const endTime = new Date(event.end).toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: config.user.timezone,
+    });
 
-    await sendMessage(message);
+    // Calculate duration
+    const durationMs = new Date(event.end).getTime() - new Date(event.start).getTime();
+    const durationMin = Math.round(durationMs / 60000);
+    const durationLabel =
+      durationMin >= 60
+        ? `${Math.floor(durationMin / 60)}h ${durationMin % 60}min`
+        : `${durationMin} min`;
+
+    const shortId = event.id.slice(0, 8);
+
+    await sendMessage(
+      fmt.build(
+        fmt.header('✅  Meeting Complete', event.title),
+        '',
+        fmt.field('Time', `${startTime} – ${endTime}`),
+        fmt.field('Duration', durationLabel),
+        event.location ? fmt.field('Location', event.location) : '',
+        fmt.field('Priority', event.priority),
+        '',
+        fmt.divider(),
+        '*What\'s next?*',
+        '',
+        `  📋  *SUMMARY ${shortId}*   Generate an AI summary with action items`,
+        `  ⏭️  *SKIP ${shortId}*      Dismiss without a summary`,
+        '',
+        fmt.footer('This prompt expires in 1 hour.')
+      )
+    );
+
     console.log(`[FollowUpAgent] Sent follow-up prompt for ${event.title}`);
   }
 
-  async generateSummary(eventId: string): Promise<void> {
-    const event = await memGet<ScoredEvent>(`followup:pending:${eventId}`);
+  async generateSummary(shortEventId: string): Promise<void> {
+    const event = await memGet<ScoredEvent>(`followup:pending:${shortEventId}`);
     if (!event) {
-      await sendMessage('❓ Meeting not found or already dismissed.');
+      await sendMessage(
+        fmt.build(
+          fmt.header('❓  Meeting Not Found'),
+          '',
+          `  No follow-up found for ID *${shortEventId}*.`,
+          '  It may have already been dismissed or expired.',
+          '',
+          fmt.footer('Follow-up prompts expire after 1 hour.')
+        )
+      );
       return;
     }
 
@@ -91,15 +132,59 @@ export class FollowUpAgent {
     const content = response.content[0];
     if (content.type !== 'text') throw new Error('[FollowUpAgent] Unexpected Claude response');
 
-    const summaryMessage = [
-      `📋 *Meeting Summary — ${event.title}*`,
-      ``,
-      content.text,
-      ``,
-      `_Reply *DONE* to mark all items as completed._`,
-    ].join('\n');
+    // ─── Parse SUMMARY and ACTION ITEMS blocks ─────────────────────────────
+    const rawText = content.text;
+    const summaryMatch = rawText.match(/SUMMARY:\s*([\s\S]*?)(?=ACTION ITEMS:|$)/i);
+    const actionMatch = rawText.match(/ACTION ITEMS:\s*([\s\S]*?)$/i);
 
-    await sendMessage(summaryMessage);
+    const summaryBody = summaryMatch ? summaryMatch[1].trim() : rawText.trim();
+    const actionLines = actionMatch
+      ? actionMatch[1]
+          .trim()
+          .split('\n')
+          .map((l) => l.replace(/^[•\-\*]\s*/, '').trim())
+          .filter(Boolean)
+      : [];
+
+    const startTime = new Date(event.start).toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: config.user.timezone,
+    });
+    const endTime = new Date(event.end).toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: config.user.timezone,
+    });
+    const dateStr = new Date(event.start).toLocaleDateString('en-IN', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      timeZone: config.user.timezone,
+    });
+
+    const messageParts: string[] = [
+      fmt.header('📋  Meeting Summary', event.title),
+      fmt.footer(`${dateStr}  ·  ${startTime} – ${endTime}`),
+      '',
+      fmt.divider(),
+      '*Overview*',
+      `  ${summaryBody.replace(/\n/g, '\n  ')}`,
+    ];
+
+    if (actionLines.length > 0) {
+      messageParts.push('');
+      messageParts.push(fmt.divider());
+      messageParts.push('*Action Items*');
+      messageParts.push('');
+      messageParts.push(fmt.numbered(actionLines));
+    }
+
+    messageParts.push('');
+    messageParts.push(fmt.divider());
+    messageParts.push(fmt.footer('Reply DONE to mark all action items as complete.'));
+
+    await sendMessage(fmt.build(...messageParts));
     console.log(`[FollowUpAgent] Summary sent for ${event.title}`);
   }
 }

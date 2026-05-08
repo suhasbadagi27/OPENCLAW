@@ -1,10 +1,12 @@
+require("dotenv").config();
+
 const { google } = require("googleapis");
 const readline = require("readline");
 
 const oauth2Client = new google.auth.OAuth2(
-    "528424404243-0le5q1dpfmc06e90kggqbumpcndh96kj.apps.googleusercontent.co",
-    "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",
-    "http://localhost"
+    process.env.GOOGLE_CALENDAR_CLIENT_ID,
+    process.env.GOOGLE_CALENDAR_CLIENT_SECRET,
+    "http://localhost:3000"
 );
 
 const scopes = [
@@ -29,11 +31,16 @@ rl.question("\nPaste the code here: ", async (code) => {
     try {
         const { tokens } = await oauth2Client.getToken(code);
 
-        console.log("\nYOUR REFRESH TOKEN:\n");
+        console.log("\n===== TOKENS =====\n");
+        console.log(tokens);
+
+        console.log("\n===== REFRESH TOKEN =====\n");
         console.log(tokens.refresh_token);
 
         rl.close();
     } catch (err) {
+        console.error("\nERROR:\n");
         console.error(err);
+        rl.close();
     }
 });

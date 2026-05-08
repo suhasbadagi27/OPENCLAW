@@ -14,7 +14,7 @@
     "@googlemaps/google-maps-services-js": "^3.4.0",
     "@upstash/redis": "^1.31.3",
     "axios": "^1.6.8",
-    "dotenv": "^16.4.5",
+    "dotenv": "^16.6.1",
     "express": "^4.19.2",
     "googleapis": "^140.0.1",
     "imapflow": "^1.0.162",
